@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>K-Hub AI Chatbot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen flex overflow-hidden">
+
+    <div class="w-64 bg-gray-950 flex flex-col justify-between border-r border-gray-800">
+        <div class="p-4 flex flex-col h-full">
+            <button onclick="createNewSession()" class="w-full py-2 px-4 mb-4 bg-blue-600 hover:bg-blue-700 font-medium rounded-lg transition text-sm flex items-center justify-center gap-2">
+                <span>+</span> New Conversation
+            </button>
+            
+            <div class="flex-1 overflow-y-auto space-y-1" id="sessions-list">
+                </div>
+        </div>
+        <div class="p-4 text-xs text-gray-500 border-t border-gray-800 text-center">
+            K-Hub Junior Dev Task
+        </div>
+    </div>
+
+    <div class="flex-1 flex flex-col bg-gray-900">
+        <header class="p-4 bg-gray-950 border-b border-gray-800 flex justify-between items-center">
+            <h1 class="font-semibold text-lg" id="current-chat-title">Select or start a chat</h1>
+        </header>
+
+        <div class="flex-1 overflow-y-auto p-6 space-y-4" id="chat-box">
+            <div class="text-center text-gray-500 mt-10">Start typing below to converse with Gemini!</div>
+        </div>
+
+        <div class="p-4 bg-gray-950 border-t border-gray-800">
+            <form id="chat-form" onsubmit="sendMessage(event)" class="flex gap-2 max-w-4xl mx-auto">
+                <input type="text" id="user-input" placeholder="Type your message..." required autocomplete="off"
+                    class="flex-1 px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500 text-sm">
+                <button type="submit" id="send-btn" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 font-medium rounded-lg transition text-sm">
+                    Send
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://127.0.0.1:5000/api';
+        let currentSessionId = null;
+
+        // Load sessions list on startup
+        window.addEventListener('DOMContentLoaded', fetchSessions);
+
+        async function fetchSessions() {
+            const res = await fetch(`${API_BASE}/sessions`);
+            const sessions = await res.json();
+            const listContainer = document.getElementById('sessions-list');
+            listContainer.innerHTML = '';
+
+            sessions.forEach(session => {
+                const item = document.createElement('div');
+                item.className = `flex justify-between items-center p-2.5 rounded-lg text-sm cursor-pointer group hover:bg-gray-800 ${currentSessionId === session.id ? 'bg-gray-800' : ''}`;
+                item.onclick = () => selectSession(session.id, session.title);
+                
+                item.innerHTML = `
+                    <span class="truncate pr-2">${session.title}</span>
+                    <button onclick="deleteSession(event, ${session.id})" class="text-gray-500 hover:text-red-400 hidden group-hover:block px-1">✕</button>
+                `;
+                listContainer.appendChild(item);
+            });
+        }
+
+        async function createNewSession() {
+            const res = await fetch(`${API_BASE}/sessions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: "New Conversation" })
+            });
+            const data = await res.json();
+            currentSessionId = data.session_id;
+            await fetchSessions();
+            selectSession(data.session_id, data.title);
+        }
+
+        async function selectSession(id, title) {
+            currentSessionId = id;
+            document.getElementById('current-chat-title').innerText = title;
+            
+            // Highlight current active tab
+            fetchSessions();
+
+            const res = await fetch(`${API_BASE}/sessions/${id}/messages`);
+            const messages = await res.json();
+            
+            const chatBox = document.getElementById('chat-box');
+            chatBox.innerHTML = '';
+
+            if(messages.length === 0) {
+                chatBox.innerHTML = `<div class="text-center text-gray-500 mt-10">No messages in this chat yet.</div>`;
+                return;
+            }
+
+            messages.forEach(msg => {
+                appendMessage(msg.role, msg.content);
+            });
+            scrollToBottom();
+        }
+
+        async function deleteSession(event, id) {
+            event.stopPropagation(); // Avoid triggering selectSession
+            if(!confirm("Delete this conversation history?")) return;
+
+            await fetch(  `${API_BASE}/sessions/${id}`, { method: 'DELETE' });
+            if (currentSessionId === id) {
+                currentSessionId = null;
+                document.getElementById('current-chat-title').innerText = "Select or start a chat";
+                document.getElementById('chat-box').innerHTML = '<div class="text-center text-gray-500 mt-10">Select or start a chat</div>';
+            }
+            fetchSessions();
+        }
+
+        function appendMessage(role, text) {
+            const chatBox = document.getElementById('chat-box');
+            
+            // Remove initial placeholder helper if present
+            if (chatBox.querySelector('.text-center')) {
+                chatBox.innerHTML = '';
+            }
+
+            const wrapper = document.createElement('div');
+            wrapper.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+
+            const bubble = document.createElement('div');
+            bubble.className = `max-w-xl p-3 rounded-xl text-sm whitespace-pre-wrap ${
+                role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-200'
+            }`;
+            bubble.textContent = text;
+
+            wrapper.appendChild(bubble);
+            chatBox.appendChild(wrapper);
+            scrollToBottom();
+        }
+
+        async function sendMessage(event) {
+            event.preventDefault();
+            const inputElement = document.getElementById('user-input');
+            const messageText = inputElement.value.trim();
+            if (!messageText) return;
+
+            // If user typed without selecting a session, force-generate a new session
+            if (!currentSessionId) {
+                await createNewSession();
+            }
+
+            // Immediately append user message to UI
+            appendMessage('user', messageText);
+            inputElement.value = '';
+
+            // Add Loading State Indicator
+            const chatBox = document.getElementById('chat-box');
+            const loadingIndicator = document.createElement('div');
+            loadingIndicator.id = "loading-bubble";
+            loadingIndicator.className = "text-xs text-gray-400 italic animate-pulse";
+            loadingIndicator.innerText = "Gemini is thinking...";
+            chatBox.appendChild(loadingIndicator);
+            scrollToBottom();
+
+            try {
+                const response = await fetch(`${API_BASE}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: currentSessionId, message: messageText })
+                });
+                const data = await response.json();
+                
+                // Clear Loading State
+                document.getElementById('loading-bubble').remove();
+
+                if (data.response) {
+                    appendMessage('model', data.response);
+                } else if (data.error) {
+                    appendMessage('model', `⚠️ ${data.error}`);
+                }
+            } catch (err) {
+                document.getElementById('loading-bubble').remove();
+                appendMessage('model', "⚠️ Failed to connect to backend server.");
+            }
+            
+            // Sync conversation sidebar to catch auto-renamed chat titles
+            fetchSessions();
+        }
+
+        function scrollToBottom() {
+            const chatBox = document.getElementById('chat-box');
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+    </script>
+</body>
+</html>
